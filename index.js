@@ -1,13 +1,14 @@
-/* index.js — AI Image Studio (Web)
-   - Tách từ content.js: giữ nguyên UI/logic panel, thay chrome.* bằng localStorage + fetch.
-   - safeSend():
-        • "runtime.openOptions"  -> mở options.html
-        • "downloads.saveBase64" -> tải file về
-        • "gemini.generateImage" -> gọi Generative Language API (responseMimeType: image/png)
-*/
+/* ================== AI Image Studio (Web, no settings page) ==================
+   - UI/logic tách từ bản extension, hoạt động thuần web (localStorage + fetch).
+   - Nguồn KEY + templates lấy từ localStorage (đã seed bởi config.js).
+   - Hành vi thay thế:
+       • open options  -> không dùng (ẩn nút).
+       • downloads.saveBase64 -> tạo <a download> để tải ảnh.
+       • gemini.generateImage -> gọi Generative Language API (responseMimeType: image/png).
+   ============================================================================ */
 
 (() => {
-  // ======= WEB SHIMS (storage + "sendMessage") =======
+  /* -------- Storage helpers -------- */
   const ls = {
     get: async (key, fallback) => {
       try {
@@ -25,6 +26,7 @@
   };
   async function safeGet(key, fallback) { return await ls.get(key, fallback); }
 
+  /* -------- Save base64 to file -------- */
   function downloadBase64(name, base64) {
     const a = document.createElement("a");
     a.href = base64;
@@ -32,8 +34,9 @@
     document.body.appendChild(a); a.click(); a.remove();
   }
 
+  /* -------- Direct Gemini call (image) -------- */
   async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
-    const API_KEY = localStorage.getItem("GOOGLE_API_KEY");
+    const API_KEY = JSON.parse(localStorage.getItem("GOOGLE_API_KEY") || "null");
     if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
 
     const parts = [];
@@ -66,12 +69,10 @@
     return `data:image/png;base64,${b64}`;
   }
 
+  /* -------- Message shim -------- */
   async function safeSend(type, payload = {}) {
     try {
       switch (type) {
-        case "runtime.openOptions":
-          location.href = "./settings.html";
-          return { ok: true };
         case "downloads.saveBase64": {
           const { base64, filename } = payload;
           downloadBase64(filename || `image_${Date.now()}.png`, base64);
@@ -90,7 +91,7 @@
     }
   }
 
-  // ======= ORIGINAL PANEL (giữ nguyên, chỉ bỏ dock/long-press/extension-msg) =======
+  /* ======================= UI (giữ nguyên layout) ======================= */
   const STATUS_HIDE_MS = 2400;
 
   let host, shadow, statusEl;
@@ -125,7 +126,7 @@
     const sr = host.attachShadow({ mode:"open" });
     shadow = sr;
 
-    // ======= TEMPLATE (y nguyên từ content.js của bạn) =======
+    /* ----------------- TEMPLATE (UI) ----------------- */
     sr.innerHTML = `
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
@@ -222,7 +223,7 @@
         <header>
           <div class="title">AI Image Studio</div>
           <div class="row">
-            <button class="btn ghost" id="opt"><span>Options</span></button>
+            <!-- Nút Options đã ẩn trong bản web thuần -->
             <button class="btn ghost" id="close"><span>×</span></button>
           </div>
         </header>
@@ -375,7 +376,7 @@
 
     document.documentElement.appendChild(host);
 
-    // ===== bind refs
+    /* ------------- bind refs + events ------------- */
     statusEl = shadow.getElementById("status");
     fx = shadow.getElementById("fx");
     sampleTplSel = shadow.getElementById("sampleTpl");
@@ -427,10 +428,6 @@
     corsDlg = shadow.getElementById("corsDlg");
 
     shadow.getElementById("close")?.addEventListener("click", () => (host.style.display = "none"));
-    shadow.getElementById("opt")?.addEventListener("click", async () => {
-      const r = await safeSend("runtime.openOptions");
-      if (!r?.ok) showStatus("err", r.error || "Cannot open options");
-    });
 
     genArtBtn?.addEventListener("click", doGenerateArtworkPreview);
     applyArtBtn?.addEventListener("click", () => applyCurrentArtwork());
@@ -488,7 +485,7 @@
     resetProgress();
   }
 
-  // ---------- Mockup templates ----------
+  /* ---------- Mockup templates ---------- */
   async function loadMockupTemplates(selectEl, onPick) {
     const got = await safeGet("TEMPLATES", []);
     const list = got.TEMPLATES || [];
@@ -506,7 +503,7 @@
     });
   }
 
-  // ---------- Artwork Ref templates ----------
+  /* ---------- Artwork Ref templates ---------- */
   let __artRefIndex = [];
   async function loadArtRefTemplates(selectEl){
     if (!selectEl) return;
@@ -553,7 +550,7 @@
     toast(`Loaded refs: ${name}`);
   }
 
-  // ---------- Sample templates (Product Sample) ----------
+  /* ---------- Sample templates (Product Sample) ---------- */
   let __sampleIndex = [];
   async function loadSampleTemplates(selectEl){
     if (!selectEl) return;
@@ -601,7 +598,7 @@
     toast(`Loaded sample: ${name}`);
   }
 
-  // ---------- UI helpers ----------
+  /* ---------- UI helpers ---------- */
   function sparkleBurst(x, y, n = 18) {
     if (!fx) return;
     const colors = ['#60a5fa','#a78bfa','#f472b6','#fbbf24','#34d399','#22d3ee','#f87171'];
@@ -704,7 +701,7 @@
     state.artwork = b64; loadPreview(artPrevImg, b64); showStatus("ok", "Applied to Artwork.");
   }
 
-  // ---------- Artwork generation ----------
+  /* ---------- Artwork generation ---------- */
   async function doGenerateArtworkPreview() {
     const prompt = artPromptEl.value.trim();
     if (!prompt) return toast("Enter artwork prompt first.", true);
@@ -739,7 +736,7 @@
     }
   }
 
-  // ---------- Mockups (always 1:1) ----------
+  /* ---------- Mockups (always 1:1) ---------- */
   async function doGenerateMockups() {
     const model = modelSel.value;
     const count = parseInt(countSel.value, 10) || 1;
@@ -823,11 +820,7 @@
     }
   }
 
-  function openViewer(b64) {
-    shadow.getElementById("viewerImg").src = b64;
-    viewer.style.display = "flex";
-    viewer.onclick = () => (viewer.style.display = "none");
-  }
+  function openViewer(b64) { shadow.getElementById("viewerImg").src = b64; viewer.style.display = "flex"; viewer.onclick = () => (viewer.style.display = "none"); }
 
   async function saveAllGenerated() {
     const sku = (skuInput.value || "").trim();
@@ -851,7 +844,7 @@
     try { return !!shadow?.getElementById("up2x")?.classList.contains("on"); } catch { return false; }
   }
 
-  // ---------- utils ----------
+  /* ---------- utils ---------- */
   function sanitizePath(s) { return String(s).replace(/[\\:?*"<>|]+/g, "-").trim() || "SKU"; }
   function toast(msg, err) {
     const d = document.createElement("div");
@@ -956,11 +949,9 @@
       toast("Clipboard has no image.", true);
     } catch { toast("Clipboard blocked.", true); }
   }
-  function openPanelWithBase64(b64) { if (!host) createPanel(); host.style.display = "block"; state.artwork = b64; loadPreview(artPrevImg, b64); }
-  function openViewer(b64) { shadow.getElementById("viewerImg").src = b64; viewer.style.display = "flex"; viewer.onclick = () => (viewer.style.display = "none"); }
   function openCorsHelp(url) { if (!host) createPanel(); shadow.getElementById("dlgUrl").textContent = url; shadow.getElementById("corsDlg").style.display = "flex"; }
 
-  // ===== Auto open panel on load =====
+  /* ===== Auto open panel on load ===== */
   window.__AI_IMAGE_STUDIO__ = { open: () => { if (!host) createPanel(); host.style.display = "block"; } };
   const open = () => window.__AI_IMAGE_STUDIO__?.open?.();
   if (document.readyState === "loading") window.addEventListener("DOMContentLoaded", open, { once:true }); else open();
