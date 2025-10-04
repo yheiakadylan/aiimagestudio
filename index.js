@@ -31,67 +31,66 @@
   }
 
   /* -------- Direct Gemini call (image) --------
-     - Không set generationConfig.response_mime_type
-     - Trả về base64 từ parts[].inline_data
+     - Gọi models/...:generateContent trực tiếp, không cần extension
+     - Trả về base64 từ parts[].inline_data / inlineData
   ------------------------------------------------ */
-// --- giữ extractInlineImage ---
-function extractInlineImage(data) {
-  try {
-    const cands = data?.candidates || [];
-    for (const cand of cands) {
-      const parts = cand?.content?.parts || [];
-      for (const p of parts) {
-        if (p?.inlineData?.data) return { mime: p.inlineData.mimeType || "image/png", data: p.inlineData.data };
-        if (p?.inline_data?.data) return { mime: p.inline_data.mime_type || "image/png", data: p.inline_data.data };
+
+  function extractInlineImage(data) {
+    try {
+      const cands = data?.candidates || [];
+      for (const cand of cands) {
+        const parts = cand?.content?.parts || [];
+        for (const p of parts) {
+          if (p?.inlineData?.data) return { mime: p.inlineData.mimeType || "image/png", data: p.inlineData.data };
+          if (p?.inline_data?.data) return { mime: p.inline_data.mime_type || "image/png", data: p.inline_data.data };
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
+    const API_KEY = getFromLS("GOOGLE_API_KEY");
+    if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
+
+    const parts = [];
+    if (images && images.length) {
+      for (const dataUrl of images) {
+        const m = String(dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+        if (!m) continue;
+        parts.push({ inlineData: { mimeType: m[1], data: m[2] } });
       }
     }
-  } catch {}
-  return null;
-}
-
-// --- giữ directGeminiGenerateImage bản robust ---
-async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
-  const API_KEY = getFromLS("GOOGLE_API_KEY");
-  if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
-
-  const parts = [];
-  if (prompt) parts.push({ text: prompt });
-  if (aspectRatio && aspectRatio !== "1:1") parts.push({ text: `(target aspect ratio: ${aspectRatio})` });
-  if (images && images.length) {
-    for (const dataUrl of images) {
-      const m = String(dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-      if (!m) continue;
-      parts.push({ inlineData: { mimeType: m[1], data: m[2] } });
+    if (aspectRatio && aspectRatio !== "1:1") {
+      parts.push({ text: `(target aspect ratio: ${aspectRatio})` });
     }
+    if (prompt) parts.push({ text: prompt });
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${API_KEY}`;
+    const body = {
+      contents: [{ role: "user", parts }],
+      generationConfig: { response_mime_type: "image/png" }
+    };
+
+    const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`; try { msg += ` — ${JSON.stringify(await r.json())}` } catch {}
+      throw new Error(msg);
+    }
+    const data = await r.json();
+
+    const img = extractInlineImage(data);
+    if (img?.data) return `data:${img.mime || "image/png"};base64,${img.data}`;
+
+    const cand0 = data?.candidates?.[0];
+    const finish = cand0?.finishReason || cand0?.finish_reason;
+    const safety = cand0?.safetyRatings || cand0?.safety_ratings;
+    const feedback = data?.promptFeedback || data?.prompt_feedback;
+    console.warn("Gemini response (no inline image found):", { finish, safety, feedback, parts: cand0?.content?.parts });
+    throw new Error(finish ? `No image (finishReason: ${finish})` : "No image in response.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${API_KEY}`;
-  const body = {
-    contents: [{ role: "user", parts }],
-    generationConfig: { response_mime_type: "image/png" }
-  };
-
-  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`; try { msg += ` — ${JSON.stringify(await r.json())}` } catch {}
-    throw new Error(msg);
-  }
-  const data = await r.json();
-
-  const img = extractInlineImage(data);
-  if (img?.data) return `data:${img.mime || "image/png"};base64,${img.data}`;
-
-  const cand0 = data?.candidates?.[0];
-  const finish = cand0?.finishReason || cand0?.finish_reason;
-  const safety = cand0?.safetyRatings || cand0?.safety_ratings;
-  const feedback = data?.promptFeedback || data?.prompt_feedback;
-  console.warn("Gemini response (no inline image found):", { finish, safety, feedback, parts: cand0?.content?.parts });
-  throw new Error(finish ? `No image (finishReason: ${finish})` : "No image in response.");
-}
-
-
-
-  /* -------- Message shim -------- */
+  /* -------- Message shim (thay chrome.runtime) -------- */
   async function safeSend(type, payload = {}) {
     try {
       switch (type) {
@@ -113,7 +112,7 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
     }
   }
 
-  /* ======================= UI (như bản trước) ======================= */
+  /* ======================= UI (web) ======================= */
   const STATUS_HIDE_MS = 2400;
 
   let host, shadow, statusEl;
@@ -225,7 +224,7 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
         .evenStack .row{ flex:0 0 auto; }
         .evenStack .samples{ flex:1 1 auto; min-height:100px; overflow:auto; }
         #fx{ position:fixed; inset:0; pointer-events:none; z-index:2147483648; }
-        .sparkle{ position:absolute; width:8px; height:8px; border-radius:50%; background: radial-gradient(circle at 30% 30%, #fff, rgba(255,255,255,.2) 60%, transparent 70%); box-shadow: 0 0 10px currentColor, 0 0 18px currentColor; animation: pop .9s ease-out forwards; }
+        .sparkle{ position:absolute; width:8px; height:8px; border-radius:50%; background: radial-gradient(circle at 30% 30%, #fff, rgba(255,255,255,.2) 60%, transparent 70%); box-shadow:0 0 10px currentColor, 0 0 18px currentColor; animation: pop .9s ease-out forwards; }
         @keyframes pop{ 0%{ transform: translate(0,0) scale(.6); opacity:1; } 80%{ opacity:1; } 100%{ transform: translate(var(--dx), var(--dy)) scale(0); opacity:0; } }
         :host, .wrap, .col, .outGrid, .samples, .preview, textarea, #artRefList, #sampleList { scrollbar-gutter: stable both-edges; }
         *::-webkit-scrollbar{ width:10px; height:10px; }
@@ -245,7 +244,6 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
         <header>
           <div class="title">AI Image Studio</div>
           <div class="row">
-            <!-- Nút Options đã ẩn trong bản web thuần -->
             <a class="btn ghost" id="openOptions" href="./settings.html" target="_blank" rel="noopener">
               <span>Options</span>
             </a>
@@ -718,16 +716,13 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
     const n = state.previews.length; if (n < 2) return;
     state.curIdx = (state.curIdx + step + n) % n; updateArtworkView();
   }
-  function applyCurrentArtwork(force = false) {
-    // Ưu tiên lấy ảnh hiện đang xem trong previews
+  function applyCurrentArtwork() {
     const candidate = state.previews?.[state.curIdx] || state.artwork || null;
-    if (!candidate) return; // không set src=null nữa
-
+    if (!candidate) return;
     state.artwork = candidate;
     loadPreview(artPrevImg, state.artwork);
     showStatus("ok", "Applied to Artwork.");
   }
-
 
   /* ---------- Artwork generation ---------- */
   async function doGenerateArtworkPreview() {
@@ -902,8 +897,7 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
             const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = reject; fr.readAsDataURL(blob);
           }, "image/png");
         };
-        img.onerror = () => reject(new Error("Cannot load image."));
-        img.src = dataUrl;
+        img.onerror = () => reject(new Error("Cannot load image.")); img.src = dataUrl;
       } catch (e) { reject(e); }
     });
   }
@@ -946,8 +940,6 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
     });
   }
 
-
-
   async function addSample(b64) {
     const sq = await padToSquareDataUrl(b64, 1536, null);
     state.samples.push(sq);
@@ -979,6 +971,7 @@ async function directGeminiGenerateImage({ model, prompt, aspectRatio, images })
       toast("Clipboard has no image.", true);
     } catch { toast("Clipboard blocked.", true); }
   }
+  function openViewer(b64) { shadow.getElementById("viewerImg").src = b64; viewer.style.display = "flex"; viewer.onclick = () => (viewer.style.display = "none"); }
   function openCorsHelp(url) { if (!host) createPanel(); shadow.getElementById("dlgUrl").textContent = url; shadow.getElementById("corsDlg").style.display = "flex"; }
 
   /* ===== Auto open panel on load ===== */
