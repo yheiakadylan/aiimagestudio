@@ -16,6 +16,11 @@
     }
   };
   async function safeGet(key, fallback) { return await ls.get(key, fallback); }
+  function getFromLS(key) {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return null;
+    try { return JSON.parse(raw); } catch { return raw; }
+  }
 
   /* -------- Save base64 to file -------- */
   function downloadBase64(name, base64) {
@@ -30,7 +35,7 @@
      - Trả về base64 từ parts[].inline_data
   ------------------------------------------------ */
   async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
-    const API_KEY = JSON.parse(localStorage.getItem("GOOGLE_API_KEY") || "null");
+    const API_KEY = getFromLS("GOOGLE_API_KEY");
     if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
 
     const parts = [];
