@@ -37,33 +37,45 @@
   async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
     const API_KEY = getFromLS("GOOGLE_API_KEY");
     if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
-
+  
     const parts = [];
     if (prompt) parts.push({ text: prompt });
-    if (aspectRatio && aspectRatio !== "1:1") parts.push({ text: `(target aspect ratio: ${aspectRatio})` });
+    if (aspectRatio && aspectRatio !== "1:1") {
+      parts.push({ text: `(target aspect ratio: ${aspectRatio})` });
+    }
     if (images && images.length) {
       for (const dataUrl of images) {
         const m = String(dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
         if (!m) continue;
-        parts.push({ inline_data: { mime_type: m[1], data: m[2] } });
+        parts.push({ inlineData: { mimeType: m[1], data: m[2] } }); // <-- camelCase
       }
     }
-
+  
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${API_KEY}`;
-    const body = { contents: [{ role:"user", parts }] };
-    const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    const body = {
+      contents: [{ role: "user", parts }],
+      generationConfig: { response_mime_type: "image/png" } // an toàn hơn
+    };
+  
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
     if (!r.ok) {
-      let msg = `HTTP ${r.status}`; try{ msg += ` — ${JSON.stringify(await r.json())}` }catch{}
+      let msg = `HTTP ${r.status}`; try { msg += ` — ${JSON.stringify(await r.json())}` } catch {}
       throw new Error(msg);
     }
+  
     const data = await r.json();
     const cand = data?.candidates?.[0];
     const partsOut = cand?.content?.parts || [];
-    const inline = partsOut.find(p => p.inline_data)?.inline_data;
+    const inline = partsOut.find(p => p.inlineData)?.inlineData; // <-- camelCase
     if (!inline?.data) throw new Error("No image in response.");
-    const mime = inline.mime_type || "image/png";
+    const mime = inline.mimeType || "image/png";                 // <-- camelCase
     return `data:${mime};base64,${inline.data}`;
   }
+
 
   /* -------- Message shim -------- */
   async function safeSend(type, payload = {}) {
