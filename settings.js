@@ -1,6 +1,92 @@
-/* ===== WEB SHIM: chrome.* -> localStorage + fetch ===== */
+/* ===== WEB SHIM for settings.js: chrome.* -> localStorage + fetch =====
+   - Dùng cho bản web (không có MV3). Bỏ qua nếu chạy trong extension thật.
+   - Cung cấp: chrome.storage.local.{get,set,remove,clear} + runtime.sendMessage
+   - Map "test.gai" -> gọi Google AI Models API để kiểm tra key.
+*/
 
-// storage shim (localStorage)
+(function attachWebShim(){
+  // Nếu trình duyệt đã có chrome.* (đang chạy trong extension) thì bỏ qua.
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.runtime?.sendMessage) return;
+
+  // storage shim qua localStorage
+  function makeLocalStorageShim() {
+    return {
+      async get(keys) {
+        if (keys == null) return {};
+        const arr = Array.isArray(keys) ? keys : [keys];
+        const out = {};
+        for (const k of arr) {
+          const raw = localStorage.getItem(k);
+          try { out[k] = raw ? JSON.parse(raw) : undefined; }
+          catch { out[k] = raw; }
+        }
+        return out;
+      },
+      async set(obj) {
+        Object.entries(obj || {}).forEach(([k, v]) => {
+          localStorage.setItem(k, typeof v === "string" ? v : JSON.stringify(v));
+        });
+        // Phát sự kiện giả nếu ai đó lắng nghe storage.onChanged
+        try {
+          const changes = {};
+          for (const [k, v] of Object.entries(obj || {})) {
+            changes[k] = { newValue: v };
+          }
+          chrome.storage?.onChanged?._emit?.(changes, "local");
+        } catch {}
+      },
+      async remove(keys){
+        (Array.isArray(keys)?keys:[keys]).forEach(k=>localStorage.removeItem(k));
+      },
+      async clear(){ localStorage.clear(); }
+    };
+  }
+
+  // map message types từng dùng trong options/settings
+  async function webSendMessage(msg) {
+    try {
+      switch (msg?.type) {
+        // Test Google AI API key
+        case "test.gai": {
+          // Lấy key từ localStorage (đã lưu bởi settings UI)
+          let key = localStorage.getItem("GOOGLE_API_KEY");
+          try { key = JSON.parse(key); } catch {}
+          if (!key) return { ok:false, error:"Missing GOOGLE_API_KEY" };
+
+          // Gọi endpoint nhẹ nhất để test: liệt kê models (v1beta)
+          const url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + encodeURIComponent(key);
+          const res = await fetch(url, { method: "GET" });
+          if (!res.ok) return { ok:false, error:`HTTP ${res.status}` };
+          return { ok:true };
+        }
+
+        default:
+          return { ok:true }; // các message khác không dùng ở settings
+      }
+    } catch (e) {
+      return { ok:false, error:String(e?.message||e) };
+    }
+  }
+
+  // gắn shim
+  window.chrome = window.chrome || {};
+  chrome.storage = chrome.storage || {};
+  chrome.storage.local = chrome.storage.local || makeLocalStorageShim();
+
+  chrome.runtime = chrome.runtime || {};
+  chrome.runtime.sendMessage = chrome.runtime.sendMessage || ((msg, cb) => {
+    webSendMessage(msg).then((res)=>cb?.(res));
+  });
+
+  chrome.runtime.getURL = chrome.runtime.getURL || ((p) => new URL(p, location.href).href);
+
+  chrome.storage.onChanged = chrome.storage.onChanged || {
+    _handlers: [],
+    addListener(fn){ this._handlers.push(fn); },
+    _emit(changes, area){ this._handlers.forEach(fn=>fn(changes, area)); }
+  };
+})();
+
 function makeLocalStorageShim() {
   return {
     async get(keys) {
