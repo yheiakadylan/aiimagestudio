@@ -66,7 +66,7 @@
     }
     if (prompt) parts.push({ text: prompt });
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/${modelId}:generateContent`;
     const body = {
       contents: [{ role: "user", parts }],
       generationConfig: { response_mime_type: "image/png" }
