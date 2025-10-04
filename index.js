@@ -220,7 +220,9 @@
           <div class="title">AI Image Studio</div>
           <div class="row">
             <!-- Nút Options đã ẩn trong bản web thuần -->
-            <button class="btn ghost" id="close"><span>×</span></button>
+            <a class="btn ghost" id="openOptions" href="./settings.html" target="_blank" rel="noopener">
+              <span>Options</span>
+            </a>
           </div>
         </header>
 
@@ -445,10 +447,10 @@
     });
 
     shadow.getElementById("chooseArt")?.addEventListener("click", () =>
-      chooseFileTo((b64) => { setArtwork([b64]); applyCurrentArtwork(true); })
+      chooseFileTo((b64) => { setArtwork([b64]); applyCurrentArtwork; })
     );
     shadow.getElementById("pasteArt")?.addEventListener("click", () =>
-      pasteClipboardTo((b64) => { setArtwork([b64]); applyCurrentArtwork(true); })
+      pasteClipboardTo((b64) => { setArtwork([b64]); applyCurrentArtwork; })
     );
 
     addArtRefBtn?.addEventListener("click", () => chooseFileTo(addArtRef));
@@ -692,10 +694,15 @@
     state.curIdx = (state.curIdx + step + n) % n; updateArtworkView();
   }
   function applyCurrentArtwork(force = false) {
-    if (!force && !state.previews.length) return;
-    const b64 = force ? state.artwork : state.previews[state.curIdx];
-    state.artwork = b64; loadPreview(artPrevImg, b64); showStatus("ok", "Applied to Artwork.");
+    // Ưu tiên lấy ảnh hiện đang xem trong previews
+    const candidate = state.previews?.[state.curIdx] || state.artwork || null;
+    if (!candidate) return; // không set src=null nữa
+  
+    state.artwork = candidate;
+    loadPreview(artPrevImg, state.artwork);
+    showStatus("ok", "Applied to Artwork.");
   }
+
 
   /* ---------- Artwork generation ---------- */
   async function doGenerateArtworkPreview() {
