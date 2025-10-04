@@ -932,6 +932,86 @@
       img.onerror = () => reject(new Error("Upscale load failed.")); img.src = dataUrl;
     });
   }
+// Quét toàn bộ candidates/parts để lấy ảnh, hỗ trợ cả inlineData | inline_data
+function extractInlineImage(data) {
+  try {
+    const cands = data?.candidates || [];
+    for (const cand of cands) {
+      const parts = cand?.content?.parts || [];
+      for (const p of parts) {
+        // Ưu tiên camelCase
+        if (p?.inlineData?.data) {
+          const mime = p.inlineData.mimeType || "image/png";
+          return { mime, data: p.inlineData.data };
+        }
+        // Fallback snake_case (nếu backend vẫn trả kiểu cũ)
+        if (p?.inline_data?.data) {
+          const mime = p.inline_data.mime_type || "image/png";
+          return { mime, data: p.inline_data.data };
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
+  const API_KEY = getFromLS("GOOGLE_API_KEY");
+  if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
+
+  const parts = [];
+  if (prompt) parts.push({ text: prompt });
+  if (aspectRatio && aspectRatio !== "1:1") {
+    parts.push({ text: `(target aspect ratio: ${aspectRatio})` });
+  }
+  if (images && images.length) {
+    for (const dataUrl of images) {
+      const m = String(dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!m) continue;
+      // dùng camelCase chuẩn; server vẫn chấp nhận snake_case nhưng ta không cần
+      parts.push({ inlineData: { mimeType: m[1], data: m[2] } });
+    }
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${API_KEY}`;
+  const body = {
+    contents: [{ role: "user", parts }],
+    // có thể bỏ dòng dưới nếu muốn; không ảnh hưởng tới việc bắt ảnh
+    generationConfig: { response_mime_type: "image/png" }
+  };
+
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`; try { msg += ` — ${JSON.stringify(await r.json())}` } catch {}
+    throw new Error(msg);
+  }
+
+  const data = await r.json();
+
+  // ---- NEW: parse robust ----
+  const img = extractInlineImage(data);
+  if (img?.data) {
+    const mime = img.mime || "image/png";
+    return `data:${mime};base64,${img.data}`;
+  }
+
+  // Nếu không có ảnh, hiển thị rõ lý do (safety, finishReason…)
+  const cand0 = data?.candidates?.[0];
+  const finish = cand0?.finishReason || cand0?.finish_reason;
+  const safety = cand0?.safetyRatings || cand0?.safety_ratings;
+  const feedback = data?.promptFeedback || data?.prompt_feedback;
+  console.warn("Gemini response (no inline image found):", { finish, safety, feedback, dataSample: cand0?.content?.parts?.slice?.(0,2) });
+  throw new Error(
+    finish
+      ? `No image (finishReason: ${finish})`
+      : "No image in response."
+  );
+}
 
   async function addSample(b64) {
     const sq = await padToSquareDataUrl(b64, 1536, null);
