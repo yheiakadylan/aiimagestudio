@@ -1,12 +1,3 @@
-/* ================== AI Image Studio (Web, no settings page) ==================
-   - UI/logic tách từ bản extension, hoạt động thuần web (localStorage + fetch).
-   - Nguồn KEY + templates lấy từ localStorage (đã seed bởi config.js).
-   - Hành vi thay thế:
-       • open options  -> không dùng (ẩn nút).
-       • downloads.saveBase64 -> tạo <a download> để tải ảnh.
-       • gemini.generateImage -> gọi Generative Language API (responseMimeType: image/png).
-   ============================================================================ */
-
 (() => {
   /* -------- Storage helpers -------- */
   const ls = {
@@ -34,7 +25,10 @@
     document.body.appendChild(a); a.click(); a.remove();
   }
 
-  /* -------- Direct Gemini call (image) -------- */
+  /* -------- Direct Gemini call (image) --------
+     - Không set generationConfig.response_mime_type
+     - Trả về base64 từ parts[].inline_data
+  ------------------------------------------------ */
   async function directGeminiGenerateImage({ model, prompt, aspectRatio, images }) {
     const API_KEY = JSON.parse(localStorage.getItem("GOOGLE_API_KEY") || "null");
     if (!API_KEY) throw new Error("Missing GOOGLE_API_KEY in localStorage.");
@@ -51,7 +45,7 @@
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${API_KEY}`;
-    const body = { contents: [{ role:"user", parts }], generationConfig: { responseMimeType:"image/png" } };
+    const body = { contents: [{ role:"user", parts }] };
     const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
     if (!r.ok) {
       let msg = `HTTP ${r.status}`; try{ msg += ` — ${JSON.stringify(await r.json())}` }catch{}
@@ -60,13 +54,10 @@
     const data = await r.json();
     const cand = data?.candidates?.[0];
     const partsOut = cand?.content?.parts || [];
-    let b64 = partsOut.find(p => p.inline_data)?.inline_data?.data;
-    if (!b64) {
-      const txt = partsOut.find(p => p.text)?.text?.trim();
-      if (txt && /^data:image\/png;base64,/.test(txt)) b64 = txt.replace(/^data:image\/png;base64,/, "");
-    }
-    if (!b64) throw new Error("No image in response.");
-    return `data:image/png;base64,${b64}`;
+    const inline = partsOut.find(p => p.inline_data)?.inline_data;
+    if (!inline?.data) throw new Error("No image in response.");
+    const mime = inline.mime_type || "image/png";
+    return `data:${mime};base64,${inline.data}`;
   }
 
   /* -------- Message shim -------- */
@@ -91,7 +82,7 @@
     }
   }
 
-  /* ======================= UI (giữ nguyên layout) ======================= */
+  /* ======================= UI (như bản trước) ======================= */
   const STATUS_HIDE_MS = 2400;
 
   let host, shadow, statusEl;
